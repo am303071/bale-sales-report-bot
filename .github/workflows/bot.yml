@@ -19,7 +19,12 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+        
       - name: Run Bale Bot
         env:
           BALE_BOT_TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
-        run: python bot.py
+        run: |
+          echo "Starting Bale Sales Bot..."
+          python --version
+          echo "Token received: ${BALE_BOT_TOKEN:+YES}"
+          python -u bot.py
