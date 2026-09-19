@@ -3,6 +3,10 @@ name: Bale Sales Bot
 on:
   workflow_dispatch:
 
+  schedule:
+    - cron: "0 18 * * *"
+      timezone: "Asia/Tehran"
+
 jobs:
   run-bot:
     runs-on: ubuntu-latest
