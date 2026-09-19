@@ -2,20 +2,53 @@ import os
 import re
 import time
 import requests
-from datetime import datetime
-
+import gspread
+import google.auth
+from datetime import datetime, timezone, timedelta
 
 # =========================================================
 # CONFIG
 # =========================================================
 
 BOT_TOKEN = os.getenv("BALE_BOT_TOKEN")
+GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
 
 if not BOT_TOKEN:
     raise RuntimeError("BALE_BOT_TOKEN is not set")
 
+if not GOOGLE_SHEET_ID:
+    raise RuntimeError("GOOGLE_SHEET_ID is not set")
+
 BASE_URL = f"https://tapi.bale.ai/bot{BOT_TOKEN}"
 GET_UPDATES_URL = f"{BASE_URL}/getUpdates"
+
+IRAN_TZ = timezone(timedelta(hours=3, minutes=30))
+
+
+# =========================================================
+# GOOGLE SHEETS
+# =========================================================
+
+def connect_google_sheet():
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
+
+    credentials, _ = google.auth.default(scopes=scopes)
+    client = gspread.authorize(credentials)
+
+    spreadsheet = client.open_by_key(GOOGLE_SHEET_ID)
+
+    sales_sheet = spreadsheet.worksheet("Sales_Data")
+    log_sheet = spreadsheet.worksheet("Import_Log")
+
+    print("Google Sheets connected successfully")
+
+    return sales_sheet, log_sheet
+
+
+SALES_SHEET, LOG_SHEET = connect_google_sheet()
 
 
 # =========================================================
@@ -27,9 +60,6 @@ def clean(value):
 
 
 def normalize_digits(text):
-    """
-    Convert Persian/Arabic digits to English digits.
-    """
     text = str(text or "")
 
     translation_table = str.maketrans(
@@ -41,15 +71,8 @@ def normalize_digits(text):
 
 
 def parse_number(value):
-    """
-    Convert values such as:
-    276
-    276 م.ت
-    1,276
-    ۱٬۲۷۶
-    to integer/float.
-    """
     value = normalize_digits(value)
+
     value = value.replace(",", "")
     value = value.replace("٬", "")
     value = value.replace("٫", ".")
@@ -67,23 +90,15 @@ def parse_number(value):
     return int(number)
 
 
+def current_datetime():
+    return datetime.now(IRAN_TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+
 # =========================================================
 # SALES REPORT PARSER
 # =========================================================
 
 def parse_sales_report(text):
-    """
-    Parse a Bale sales report.
-
-    Example:
-
-    نام فروشگاه:مارلیک5
-    تاریخ1405/06/01
-    مبلغ کل فروش: 276
-    هدف روز:_
-    تعداد فاکتور:397
-    وزن سبد:696
-    """
 
     text = normalize_digits(text)
 
@@ -96,10 +111,6 @@ def parse_sales_report(text):
         "basket_weight": None,
     }
 
-    # -----------------------------------------------------
-    # Store
-    # -----------------------------------------------------
-
     store_match = re.search(
         r"نام\s*فروشگاه\s*[:：]?\s*(.+)",
         text,
@@ -109,10 +120,6 @@ def parse_sales_report(text):
     if store_match:
         result["store"] = clean(store_match.group(1))
 
-    # -----------------------------------------------------
-    # Date
-    # -----------------------------------------------------
-
     date_match = re.search(
         r"تاریخ\s*[:：]?\s*(14\d{2}/\d{1,2}/\d{1,2})",
         text
@@ -120,10 +127,6 @@ def parse_sales_report(text):
 
     if date_match:
         result["date"] = date_match.group(1)
-
-    # -----------------------------------------------------
-    # Total Sales
-    # -----------------------------------------------------
 
     sales_match = re.search(
         r"مبلغ\s*کل\s*فروش\s*[:：]?\s*([^\n\r]*)",
@@ -133,10 +136,6 @@ def parse_sales_report(text):
 
     if sales_match:
         result["sales"] = parse_number(sales_match.group(1))
-
-    # -----------------------------------------------------
-    # Daily Target
-    # -----------------------------------------------------
 
     target_match = re.search(
         r"هدف\s*روز\s*[:：]?\s*([^\n\r]*)",
@@ -150,10 +149,6 @@ def parse_sales_report(text):
         if target_value not in ("", "_", "-", "—"):
             result["target"] = parse_number(target_value)
 
-    # -----------------------------------------------------
-    # Invoices
-    # -----------------------------------------------------
-
     invoice_match = re.search(
         r"تعداد\s*فاکتور\s*[:：]?\s*([^\n\r]*)",
         text,
@@ -162,10 +157,6 @@ def parse_sales_report(text):
 
     if invoice_match:
         result["invoices"] = parse_number(invoice_match.group(1))
-
-    # -----------------------------------------------------
-    # Basket Weight
-    # -----------------------------------------------------
 
     basket_match = re.search(
         r"وزن\s*سبد\s*[:：]?\s*([^\n\r]*)",
@@ -181,15 +172,7 @@ def parse_sales_report(text):
     return result
 
 
-# =========================================================
-# VALIDATION
-# =========================================================
-
 def is_sales_report(data):
-    """
-    A message is considered a sales report when
-    the important fields exist.
-    """
 
     required_fields = [
         data.get("store"),
@@ -203,26 +186,107 @@ def is_sales_report(data):
 
 
 # =========================================================
-# DISPLAY
+# DUPLICATE CHECK
 # =========================================================
 
-def print_sales_report(data):
-    print("\n" + "=" * 60)
-    print("SALES REPORT DETECTED")
-    print("=" * 60)
+def message_already_imported(message_id):
 
-    print(f"Store         : {data['store']}")
-    print(f"Date          : {data['date']}")
-    print(f"Sales         : {data['sales']}")
-    print(f"Target        : {data['target']}")
-    print(f"Invoices      : {data['invoices']}")
-    print(f"Basket Weight : {data['basket_weight']}")
+    try:
+        message_ids = LOG_SHEET.col_values(1)
 
-    print("=" * 60 + "\n")
+        return str(message_id) in [
+            str(x).strip() for x in message_ids
+        ]
+
+    except Exception as e:
+
+        print(f"DUPLICATE CHECK ERROR: {e}")
+
+        return False
 
 
 # =========================================================
-# BALE API
+# LOG
+# =========================================================
+
+def write_import_log(
+    message_id,
+    message_text,
+    status,
+    error=""
+):
+
+    try:
+
+        LOG_SHEET.append_row(
+            [
+                str(message_id),
+                current_datetime(),
+                message_text,
+                status,
+                error,
+                current_datetime(),
+            ],
+            value_input_option="USER_ENTERED"
+        )
+
+    except Exception as e:
+
+        print(f"IMPORT LOG ERROR: {e}")
+
+
+# =========================================================
+# WRITE SALES DATA
+# =========================================================
+
+def save_sales_report(message_id, report):
+
+    try:
+
+        # If target is empty, leave the cell empty.
+        target = report["target"]
+
+        # Extract year / month / day from Persian date
+        date_parts = report["date"].split("/")
+
+        year = int(date_parts[0])
+        month = int(date_parts[1])
+        day = int(date_parts[2])
+
+        row = [
+            report["store"],          # A فروشگاه
+            report["date"],           # B تاریخ
+            report["sales"],          # C فروش
+            target if target is not None else "",  # D هدف
+            report["invoices"],       # E تعداد فاکتور
+            report["basket_weight"],  # F وزن سبد
+            year,                     # G سال
+            month,                    # H ماه
+            day,                      # I روز
+            current_datetime(),       # J تاریخ ثبت
+            "",                       # K تحقق هدف
+            "",                       # L وضعیت هدف
+            str(message_id),          # M Message_ID
+        ]
+
+        SALES_SHEET.append_row(
+            row,
+            value_input_option="USER_ENTERED"
+        )
+
+        print("Sales report saved to Google Sheets")
+
+        return True
+
+    except Exception as e:
+
+        print(f"SAVE SALES ERROR: {e}")
+
+        return False
+
+
+# =========================================================
+# BALE
 # =========================================================
 
 def get_updates(offset=None, timeout=30):
@@ -235,6 +299,7 @@ def get_updates(offset=None, timeout=30):
         params["offset"] = offset
 
     try:
+
         response = requests.get(
             GET_UPDATES_URL,
             params=params,
@@ -246,11 +311,15 @@ def get_updates(offset=None, timeout=30):
         return response.json()
 
     except requests.exceptions.RequestException as e:
+
         print(f"GET UPDATES ERROR: {e}")
+
         return None
 
     except ValueError as e:
+
         print(f"INVALID JSON RESPONSE: {e}")
+
         return None
 
 
@@ -267,7 +336,6 @@ def handle_message(message):
     sender = message.get("from", {})
 
     message_id = message.get("message_id")
-
     text = message.get("text")
 
     if not text:
@@ -279,39 +347,79 @@ def handle_message(message):
 
     print(f"Message ID : {message_id}")
     print(f"Chat ID    : {chat.get('id')}")
-    print(f"Chat Title : {chat.get('title')}")
     print(f"Sender     : {sender.get('first_name')}")
+
     print("Text:")
     print(text)
 
     # -----------------------------------------------------
-    # Parse
+    # DUPLICATE
+    # -----------------------------------------------------
+
+    if message_already_imported(message_id):
+
+        print("STATUS: DUPLICATE MESSAGE - SKIPPED")
+
+        return
+
+    # -----------------------------------------------------
+    # PARSE
     # -----------------------------------------------------
 
     report = parse_sales_report(text)
 
+    if not is_sales_report(report):
+
+        print("STATUS: NOT A COMPLETE SALES REPORT")
+
+        write_import_log(
+            message_id,
+            text,
+            "ردیابی نشد",
+            "گزارش فروش کامل تشخیص داده نشد"
+        )
+
+        return
+
     # -----------------------------------------------------
-    # Check
+    # SAVE
     # -----------------------------------------------------
 
-    if is_sales_report(report):
+    success = save_sales_report(
+        message_id,
+        report
+    )
 
-        print_sales_report(report)
+    if success:
 
-        print("STATUS: VALID SALES REPORT")
+        write_import_log(
+            message_id,
+            text,
+            "ثبت شد",
+            ""
+        )
 
-    else:
-
-        print("\nSTATUS: NOT A COMPLETE SALES REPORT")
+        print("STATUS: SAVED SUCCESSFULLY")
 
         print("\nParsed data:")
         print(report)
+
+    else:
+
+        write_import_log(
+            message_id,
+            text,
+            "خطا",
+            "خطا در ثبت اطلاعات Sales_Data"
+        )
+
+        print("STATUS: SAVE ERROR")
 
     print("-" * 60)
 
 
 # =========================================================
-# MAIN LOOP
+# MAIN
 # =========================================================
 
 def main():
@@ -336,45 +444,55 @@ def main():
             )
 
             if not result:
+
                 time.sleep(2)
                 continue
 
             if not result.get("ok"):
+
                 print("BALE API ERROR:")
                 print(result)
 
                 time.sleep(5)
                 continue
 
-            updates = result.get("result", [])
+            updates = result.get(
+                "result",
+                []
+            )
 
             for update in updates:
 
-                update_id = update.get("update_id")
+                update_id = update.get(
+                    "update_id"
+                )
 
                 if update_id is not None:
+
                     offset = update_id + 1
 
-                message = update.get("message")
+                message = update.get(
+                    "message"
+                )
 
                 if message:
+
                     handle_message(message)
 
         except KeyboardInterrupt:
 
             print("\nBot stopped by user.")
+
             break
 
         except Exception as e:
 
-            print(f"MAIN LOOP ERROR: {e}")
+            print(
+                f"MAIN LOOP ERROR: {e}"
+            )
 
             time.sleep(5)
 
-
-# =========================================================
-# START
-# =========================================================
 
 if __name__ == "__main__":
     main()
