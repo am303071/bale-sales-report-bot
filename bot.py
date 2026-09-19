@@ -391,31 +391,25 @@ def handle_message(message):
     )
 
     if success:
-
-        write_import_log(
-            message_id,
-            text,
-            "ثبت شد",
-            ""
-        )
-
-        print("STATUS: SAVED SUCCESSFULLY")
-
-        print("\nParsed data:")
-        print(report)
-
-    else:
-
-        write_import_log(
-            message_id,
-            text,
-            "خطا",
-            "خطا در ثبت اطلاعات Sales_Data"
-        )
-
-        print("STATUS: SAVE ERROR")
-
-    print("-" * 60)
+    write_import_log(
+        message_id,
+        text,
+        "ثبت شد",
+        ""
+    )
+    print("STATUS: SAVED SUCCESSFULLY")
+    print("\nParsed data:")
+    print(report)
+    return True
+else:
+    write_import_log(
+        message_id,
+        text,
+        "خطا",
+        "خطا در ثبت اطلاعات Sales_Data"
+    )
+    print("STATUS: SAVE ERROR")
+    return False
 
 
 # =========================================================
@@ -476,8 +470,12 @@ def main():
                 )
 
                 if message:
+                    saved = handle_message(message)
 
-                    handle_message(message)
+                    if saved:
+                        print("Sales report received and saved.")
+                        print("Bot is shutting down until tomorrow.")
+                    break
 
         except KeyboardInterrupt:
 
