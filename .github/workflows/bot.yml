@@ -7,6 +7,10 @@ jobs:
   run-bot:
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: read
+      id-token: write
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -16,15 +20,22 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: bale-reminder@bale-reminder-bot.iam.gserviceaccount.com
+
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-        
       - name: Run Bale Bot
         env:
           BALE_BOT_TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
         run: |
           echo "Starting Bale Sales Bot..."
           python --version
-          echo "Token received: ${BALE_BOT_TOKEN:+YES}"
+          echo "Bale token received: ${BALE_BOT_TOKEN:+YES}"
+          echo "Google Sheet ID received: ${GOOGLE_SHEET_ID:+YES}"
           python -u bot.py
