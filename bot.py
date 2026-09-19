@@ -391,25 +391,25 @@ def handle_message(message):
     )
 
     if success:
-    write_import_log(
-        message_id,
-        text,
-        "ثبت شد",
-        ""
-    )
-    print("STATUS: SAVED SUCCESSFULLY")
-    print("\nParsed data:")
-    print(report)
-    return True
-else:
-    write_import_log(
-        message_id,
-        text,
-        "خطا",
-        "خطا در ثبت اطلاعات Sales_Data"
-    )
-    print("STATUS: SAVE ERROR")
-    return False
+        write_import_log(
+            message_id,
+            text,
+            "ثبت شد",
+            ""
+        )
+        print("STATUS: SAVED SUCCESSFULLY")
+        print("\nParsed data:")
+        print(report)
+        return True
+    else:
+        write_import_log(
+            message_id,
+            text,
+            "خطا",
+            "خطا در ثبت اطلاعات Sales_Data"
+        )
+        print("STATUS: SAVE ERROR")
+        return False
 
 
 # =========================================================
